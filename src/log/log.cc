@@ -83,29 +83,30 @@ struct Cleanup {
 
 static Cleanup _gc;
 
-// time string for the logs: "0723 17:00:00.123"
+// time string for the logs: "2023-02-28 15:15:59.064373"
 class LogTime {
   public:
     enum {
-        t_len = 17, // length of time 
-        t_min = 8,  // position of minute
-        t_sec = t_min + 3,
-        t_ms = t_sec + 3,
+      t_len = 26, // length of time "2023-02-28 15:15:59.064373"
+      t_min = 14, // position of minute
+      t_sec = t_min + 3,
+      t_ms = t_sec + 3,
     };
 
-    LogTime() : _start(0) {
-        memset(_buf, 0, sizeof(_buf));
-        this->update();
+    //  LogTime() : _start(0) {
+    LogTime() {
+      memset(_buf, 0, sizeof(_buf));
+      this->update();
     }
 
     void update();
-    const char* get() const { return _buf; }
-    uint32 day() const { return *(uint32*)_buf; }
+    const char *get() const { return _buf; }
+    uint32 day() const { return *(uint32 *)_buf; }
 
   private:
-    time_t _start;
-    struct tm _tm;
-    char _buf[24]; // save the time string
+    //  time_t _start;
+    //  struct tm _tm;
+    char _buf[33]; // save the time string
 };
 
 // the local file that logs will be written to
@@ -186,14 +187,13 @@ class Logger {
 
   private:
     struct LevelLog {
-        LevelLog() : bytes(0), counter(0), write_cb(NULL), write_flags(0) {}
         ::Mutex mtx;
         fastream buf;      // logs will be pushed to this buffer
         fastream logs;     // to swap out logs in buf
-        char time_str[24]; // "0723 17:00:00.123"
+        char time_str[27]; // "2023-02-28 16:59:11.526156" // by quincy
         size_t bytes;
         size_t counter;
-        std::function<void(const void*, size_t)> write_cb;
+        std::function<void(const void*, size_t)> write_cb{};
         int write_flags;
     };
 
@@ -215,7 +215,7 @@ class Logger {
             ::Mutex mtx;
             co::hash_map<Key, PerTopic> mp;
             LogTime log_time;
-            char time_str[24];
+            char time_str[27];
         } v[A];
         co::array<PerTopic*> pts;
         std::function<void(const char*, const void*, size_t)> write_cb;
@@ -240,6 +240,7 @@ Global::Global()
     if (!__sys_api(write)) { auto r = ::write(-1, 0, 0); (void)r; }
     if (!__sys_api(select)) ::select(-1, 0, 0, 0, 0);
   #endif
+    tscns::tscns().init();  // by quincy
     s = co::static_new<fastring>(4096);
     exename = co::static_new<fastring>(os::exename());
     log_time = co::static_new<LogTime>();
@@ -344,15 +345,16 @@ void Logger::stop(bool signal_safe) {
 }
 
 void Logger::thread_fun() {
-    while (!_is_safe_to_start) _log_event.wait(8);
+    while (!_is_safe_to_start) _log_event.wait(3);  // by quincy
     while (!_stop) {
         bool signaled = _log_event.wait(FLG_log_flush_ms);
         if (_stop) break;
 
+        tscns::tscns().calibrate(); // calibrate tscns // by quincy
         global().log_time->update();
         {
             ::MutexGuard g(_llog.mtx);
-            memcpy(_llog.time_str, global().log_time->get(), LogTime::t_len);
+//            memcpy(_llog.time_str, global().log_time->get(), LogTime::t_len); // by quincy
             if (!_llog.buf.empty()) _llog.buf.swap(_llog.logs);
         }
 
@@ -366,7 +368,7 @@ void Logger::thread_fun() {
             v.log_time.update();
             {
                 ::MutexGuard g(v.mtx);
-                memcpy(v.time_str, v.log_time.get(), LogTime::t_len);
+//                memcpy(v.time_str, v.log_time.get(), LogTime::t_len); // by quincy
                 for (auto it = v.mp.begin(); it != v.mp.end(); ++it) {
                     PerTopic* pt = &it->second;
                     if (!pt->buf.empty()) {
@@ -455,7 +457,7 @@ void Logger::push(char* s, size_t n) {
         }
         {
             ::MutexGuard g(_llog.mtx);
-            memcpy(s + 1, _llog.time_str, LogTime::t_len); // log time
+//            memcpy(s + 1, _llog.time_str, LogTime::t_len); // log time by quincy
 
             auto& buf = _llog.buf;
             if (unlikely(buf.size() + n >= FLG_max_log_buffer_size)) {
@@ -487,7 +489,7 @@ void Logger::push(const char* topic, char* s, size_t n) {
         auto& v = _tlog.v[murmur_hash(topic, strlen(topic)) & (A - 1)];
         {
             ::MutexGuard g(v.mtx);
-            memcpy(s, v.time_str, LogTime::t_len);
+//            memcpy(s, v.time_str, LogTime::t_len);
 
             auto& x = v.mp[topic];
             auto& buf = x.buf;
@@ -507,6 +509,7 @@ void Logger::push(const char* topic, char* s, size_t n) {
 
 void Logger::push_fatal_log(char* s, size_t n) {
     this->stop();
+    global().log_time->update();  // last update time by quincy
     LogTime* const t = global().log_time;
     memcpy(s + 1, t->get(), LogTime::t_len);
 
@@ -621,7 +624,7 @@ fs::file& LogFile::open(const char* topic, int level, LogTime* t) {
         }
       
         if (_file.open(_path.c_str(), 'a') && new_file) {
-            char x[24] = { 0 }; // 0723 17:00:00.123
+            char x[27] = { 0 }; // "2023-02-28 16:59:11.526156" // by quincy
             memcpy(x, t->get(), LogTime::t_len);
             for (int i = 0; i < LogTime::t_len; ++i) {
                 if (x[i] == ' ' || x[i] == ':') x[i] = '_';
@@ -870,64 +873,12 @@ void on_failure(int sig) {
 }
 
 void LogTime::update() {
-    const int64 now_ms = epoch::ms();
-    const time_t now_sec = now_ms / 1000;
-    const int dt = (int) (now_sec - _start);
-
-    if (unlikely(_start == 0)) goto reset;
-    if (unlikely(dt < 0 || dt > 60)) goto reset;
-    if (dt == 0) goto set_ms;
-
-    static uint16* tb60 = []() {
-        static uint16 tb[60];
-        for (int i = 0; i < 60; ++i) {
-            uint8* p = (uint8*) &tb[i];
-            p[0] = (uint8)('0' + i / 10);
-            p[1] = (uint8)('0' + i % 10);
-        }
-        return tb;
-    }();
-
-    _tm.tm_sec += dt;
-    if (_tm.tm_min < 59 || _tm.tm_sec < 60) {
-        _start = now_sec;
-        if (_tm.tm_sec < 60) {
-            int8* p = (int8*)(tb60 + _tm.tm_sec);
-            _buf[t_sec] = (char)p[0];
-            _buf[t_sec + 1] = (char)p[1];
-        } else {
-            _tm.tm_min++;
-            _tm.tm_sec -= 60;
-            *(uint16*)(_buf + t_min) = tb60[_tm.tm_min];
-            char* p = (char*)(tb60 + _tm.tm_sec);
-            _buf[t_sec] = p[0];
-            _buf[t_sec + 1] = p[1];
-        }
-        goto set_ms;
-    }
-
-  reset:
-    {
-        _start = now_sec;
-      #ifdef _WIN32
-        _localtime64_s(&_tm, &_start);
-      #else
-        localtime_r(&_start, &_tm);
-      #endif
-        strftime(_buf, 16, "%m%d %H:%M:%S.", &_tm);
-    }
-
-  set_ms:
-    {
-        uint32 ms = (uint32)(now_ms - _start * 1000);
-        char* p = _buf + t_ms;
-        uint32 x = ms / 100;
-        p[0] = (char)('0' + x);
-        ms -= x * 100;
-        x = ms / 10;
-        p[1] = (char)('0' + x);
-        p[2] = (char)('0' + (ms - x * 10));
-    }
+    const uint64 u = tscns::us();
+    time_t x = u * 1e-06;
+    struct tm t;
+    localtime_r(&x, &t);
+    const size_t r = strftime(_buf, sizeof(_buf), "%Y-%m-%d %H:%M:%S", &t);
+    snprintf(_buf + r, sizeof(_buf) - r, ".%06d", static_cast<int>(u % 1000000));
 }
 
 inline fastream& log_stream() {
@@ -938,9 +889,11 @@ inline fastream& log_stream() {
 LevelLogSaver::LevelLogSaver(const char* file, int len, unsigned int line, int level)
     : _s(log_stream()) {
     _n = _s.size();
-    _s.resize(_n + (LogTime::t_len + 1)); // make room for: "I0523 17:00:00.123"
+    _s.resize(_n + (LogTime::t_len + 1)); // make room for: "I2023-02-28 15:15:59.064373"
     _s[_n] = "DIWE"[level];
-    (_s << ' ' << co::thread_id() << ' ').append(file, len) << ':' << line << ']' << ' ';
+    fastring time = tscns::str();
+    memcpy((char *)(_s.data() + 1), time.data(), time.size());
+    (_s << ' ' << co::thread_id() << ' ').append('[').append(file, len) << ':' << line << ']' << ' ';
 }
 
 LevelLogSaver::~LevelLogSaver() {
@@ -953,7 +906,7 @@ FatalLogSaver::FatalLogSaver(const char* file, int len, unsigned int line)
     : _s(log_stream()) {
     _s.resize(LogTime::t_len + 1);
     _s.front() = 'F';
-    (_s << ' ' << co::thread_id() << ' ').append(file, len) << ':' << line << ']' << ' ';
+    (_s << ' ' << co::thread_id() << ' ').append('[').append(file, len) << ':' << line << ']' << ' ';
 }
 
 FatalLogSaver::~FatalLogSaver() {
@@ -964,8 +917,10 @@ FatalLogSaver::~FatalLogSaver() {
 TLogSaver::TLogSaver(const char* file, int len, unsigned int line, const char* topic)
     : _s(log_stream()), _topic(topic) {
     _n = _s.size();
-    _s.resize(_n + (LogTime::t_len)); // make room for: "0523 17:00:00.123"
-    (_s << ' ' << co::thread_id() << ' ').append(file, len) << ':' << line << ']' << ' ';
+    _s.resize(_n + (LogTime::t_len)); // make room for: "I2023-02-28 15:15:59.064373"
+    fastring time = tscns::str();
+    memcpy((char*)_s.data() + _n, time.data(), LogTime::t_len);
+    (_s << ' ' << co::thread_id() << ' ').append('[').append(file, len) << ':' << line << ']' << ' ';
 }
 
 TLogSaver::~TLogSaver() {
