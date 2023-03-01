@@ -106,7 +106,7 @@ class LogTime {
   private:
     //  time_t _start;
     //  struct tm _tm;
-    char _buf[33]; // save the time string
+    char _buf[31]; // save the time string
 };
 
 // the local file that logs will be written to
@@ -877,7 +877,8 @@ void LogTime::update() {
     time_t x = u * 1e-06;
     struct tm t;
     localtime_r(&x, &t);
-    const size_t r = strftime(_buf, sizeof(_buf), "%Y-%m-%d %H:%M:%S", &t);
+    *(int *)_buf = t.tm_mday;
+    const size_t r = strftime(_buf+4, sizeof(_buf)-4, "%Y-%m-%d %H:%M:%S", &t);
     snprintf(_buf + r, sizeof(_buf) - r, ".%06d", static_cast<int>(u % 1000000));
 }
 
