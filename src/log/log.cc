@@ -345,7 +345,7 @@ void Logger::stop(bool signal_safe) {
 }
 
 void Logger::thread_fun() {
-    while (!_is_safe_to_start) _log_event.wait(3);  // by quincy
+    while (!_is_safe_to_start) _log_event.wait(8);
     while (!_stop) {
         bool signaled = _log_event.wait(FLG_log_flush_ms);
         if (_stop) break;
